@@ -1,0 +1,70 @@
+# ===============================
+# Rust (workspace / monorepo)
+# ===============================
+/target/
+**/target/
+
+**/*.rs.bk
+
+# ===============================
+# Cargo
+# ===============================
+Cargo.lock
+
+# ===============================
+# OS / Editor junk
+# ===============================
+.DS_Store
+Thumbs.db
+
+# Vim
+*.swp
+*.swo
+*.swn
+*.tmp
+
+# VS Code
+.vscode/
+!.vscode/extensions.json
+!.vscode/settings.json
+
+# JetBrains
+.idea/
+*.iml
+
+# ===============================
+# Logs & runtime artifacts
+# ===============================
+*.log
+*.trace
+
+# ===============================
+# Environment / secrets
+# ===============================
+.env
+.env.*
+*.key
+*.pem
+
+# ===============================
+# Embedded / device artifacts
+# ===============================
+*.bin
+*.hex
+*.elf
+*.img
+*.map
+
+# ===============================
+# Temporary files
+# ===============================
+tmp/
+temp/
+.cache/
+
+# ===============================
+# Network captures / debug dumps
+# ===============================
+*.pcap
+*.pcapng
+*.dump
