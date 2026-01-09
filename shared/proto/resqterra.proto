@@ -1,0 +1,237 @@
+syntax = "proto3";
+package resqterra;
+
+// =============================================================================
+// ENVELOPE - All messages wrapped in this for framing
+// =============================================================================
+
+message Envelope {
+    Header header = 1;
+    oneof payload {
+        Telemetry telemetry = 2;
+        Command command = 3;
+        Ack ack = 4;
+        Heartbeat heartbeat = 5;
+        SensorData sensor_data = 6;
+    }
+}
+
+message Header {
+    string device_id = 1;           // "edge-001", "server-main"
+    uint64 sequence_id = 2;         // Monotonic, for request/response matching
+    uint64 timestamp_ms = 3;        // Unix epoch milliseconds
+    MessageType msg_type = 4;       // Explicit type for fast dispatch
+}
+
+enum MessageType {
+    MSG_UNKNOWN = 0;
+    MSG_TELEMETRY = 1;
+    MSG_COMMAND = 2;
+    MSG_ACK = 3;
+    MSG_HEARTBEAT = 4;
+    MSG_SENSOR_DATA = 5;
+}
+
+// =============================================================================
+// TELEMETRY - Drone -> Server (status updates)
+// =============================================================================
+
+message Telemetry {
+    GpsPosition position = 1;
+    BatteryStatus battery = 2;
+    DroneState state = 3;
+    FlightControllerStatus fc_status = 4;
+    uint64 uptime_seconds = 5;
+    ConnectionQuality conn_quality = 6;
+}
+
+message GpsPosition {
+    double latitude = 1;            // Decimal degrees
+    double longitude = 2;           // Decimal degrees
+    float altitude_m = 3;           // Meters above sea level
+    float heading_deg = 4;          // 0-360 degrees
+    float ground_speed_mps = 5;     // Meters per second
+    uint32 satellites = 6;          // GPS fix quality
+    float hdop = 7;                 // Horizontal dilution of precision
+}
+
+message BatteryStatus {
+    float voltage = 1;              // Volts
+    float current = 2;              // Amps
+    uint32 remaining_percent = 3;   // 0-100
+    uint32 remaining_seconds = 4;   // Estimated flight time
+}
+
+enum DroneState {
+    DRONE_UNKNOWN = 0;
+    DRONE_IDLE = 1;
+    DRONE_PREFLIGHT = 2;
+    DRONE_ARMED = 3;
+    DRONE_TAKING_OFF = 4;
+    DRONE_IN_MISSION = 5;
+    DRONE_RETURNING_HOME = 6;
+    DRONE_LANDING = 7;
+    DRONE_EMERGENCY = 8;
+}
+
+message FlightControllerStatus {
+    bool armed = 1;
+    bool gps_lock = 2;
+    string mode = 3;                // "GUIDED", "AUTO", "RTL", etc.
+    uint32 error_count = 4;
+    repeated string active_faults = 5;
+}
+
+message ConnectionQuality {
+    Transport active_transport = 1;
+    int32 rssi_dbm = 2;             // Signal strength
+    uint32 latency_ms = 3;          // Round-trip time
+    float packet_loss_percent = 4;
+}
+
+enum Transport {
+    TRANSPORT_UNKNOWN = 0;
+    TRANSPORT_5G = 1;
+    TRANSPORT_BLUETOOTH = 2;
+}
+
+// =============================================================================
+// COMMANDS - Server -> Drone
+// =============================================================================
+
+message Command {
+    uint64 command_id = 1;          // Unique command identifier
+    CommandType cmd_type = 2;
+    uint64 expires_at_ms = 3;       // Command expiry (0 = no expiry)
+    uint32 priority = 4;            // Higher = more urgent
+
+    oneof params {
+        MissionStart mission_start = 10;
+        MissionAbort mission_abort = 11;
+        ReturnToHome rth = 12;
+        StatusRequest status_request = 13;
+        ConfigUpdate config_update = 14;
+        EmergencyStop emergency_stop = 15;
+    }
+}
+
+enum CommandType {
+    CMD_UNKNOWN = 0;
+    CMD_MISSION_START = 1;
+    CMD_MISSION_ABORT = 2;
+    CMD_RTH = 3;
+    CMD_STATUS_REQUEST = 4;
+    CMD_CONFIG_UPDATE = 5;
+    CMD_EMERGENCY_STOP = 6;
+}
+
+message MissionStart {
+    string mission_id = 1;
+    SurveyArea survey_area = 2;
+    ScanPattern scan_pattern = 3;
+    float altitude_m = 4;           // Survey altitude
+    float speed_mps = 5;            // Survey speed
+    repeated SensorConfig sensors = 6;
+}
+
+message SurveyArea {
+    repeated GpsCoordinate boundary = 1;  // Polygon vertices
+    GpsCoordinate home_position = 2;
+}
+
+message GpsCoordinate {
+    double latitude = 1;
+    double longitude = 2;
+    float altitude_m = 3;           // Optional, 0 = use mission altitude
+}
+
+enum ScanPattern {
+    PATTERN_UNKNOWN = 0;
+    PATTERN_LAWNMOWER = 1;          // Parallel lines
+    PATTERN_SPIRAL = 2;             // Inward spiral
+    PATTERN_GRID = 3;               // Cross-hatch
+    PATTERN_CUSTOM = 4;             // Use waypoints
+}
+
+message SensorConfig {
+    string sensor_type = 1;         // "GPR", "LIDAR"
+    uint32 sample_rate_hz = 2;
+    map<string, string> params = 3; // Sensor-specific config
+}
+
+message MissionAbort {
+    string reason = 1;
+    AbortAction action = 2;
+}
+
+enum AbortAction {
+    ABORT_HOVER = 0;                // Stop and hover
+    ABORT_RTH = 1;                  // Return to home
+    ABORT_LAND_NOW = 2;             // Land immediately
+}
+
+message ReturnToHome {
+    float altitude_m = 1;           // RTH altitude (0 = use default)
+    float speed_mps = 2;            // RTH speed (0 = use default)
+}
+
+message StatusRequest {
+    repeated string requested_fields = 1;  // Empty = all fields
+}
+
+message ConfigUpdate {
+    map<string, string> config = 1;
+}
+
+message EmergencyStop {
+    // No parameters - immediate motor shutoff
+    // USE WITH EXTREME CAUTION
+}
+
+// =============================================================================
+// ACK - Bidirectional acknowledgment
+// =============================================================================
+
+message Ack {
+    uint64 ack_sequence_id = 1;     // Sequence ID being acknowledged
+    uint64 command_id = 2;          // Command ID if acking a command
+    AckStatus status = 3;
+    string message = 4;             // Human-readable status/error
+    uint64 processing_time_ms = 5;  // How long command took
+}
+
+enum AckStatus {
+    ACK_UNKNOWN = 0;
+    ACK_RECEIVED = 1;               // Command received, processing
+    ACK_ACCEPTED = 2;               // Command validated, will execute
+    ACK_REJECTED = 3;               // Command rejected (see message)
+    ACK_COMPLETED = 4;              // Command execution finished
+    ACK_FAILED = 5;                 // Command execution failed
+    ACK_EXPIRED = 6;                // Command expired before execution
+}
+
+// =============================================================================
+// HEARTBEAT - Bidirectional keepalive
+// =============================================================================
+
+message Heartbeat {
+    uint64 uptime_ms = 1;
+    DroneState state = 2;           // Quick status (detailed in telemetry)
+    uint32 pending_commands = 3;    // Commands queued for execution
+    bool healthy = 4;               // Overall health flag
+}
+
+// =============================================================================
+// SENSOR DATA - Drone -> Server (bulk data)
+// =============================================================================
+
+message SensorData {
+    string sensor_type = 1;         // "GPR", "LIDAR"
+    string mission_id = 2;
+    uint64 capture_timestamp_ms = 3;
+    GpsPosition capture_position = 4;
+    bytes data = 5;                 // Raw sensor payload
+    string format = 6;              // "raw", "compressed", etc.
+    uint32 chunk_index = 7;         // For large payloads
+    uint32 total_chunks = 8;
+}

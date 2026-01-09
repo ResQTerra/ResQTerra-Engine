@@ -1,0 +1,13 @@
+[package]
+name = "resqterra-shared"
+version = "0.1.0"
+edition = "2021"
+description = "Shared protocol types and codec for ResQTerra drone communication"
+
+[dependencies]
+prost = "0.13"
+bytes = "1"
+thiserror = "1"
+
+[build-dependencies]
+prost-build = "0.13"

@@ -1,10 +1,19 @@
+[workspace]
+members = [
+    ".",
+    "shared",
+    "relay-node",
+    "server",
+]
+resolver = "2"
+
 [package]
 name = "edge-device"
 version = "0.1.0"
 edition = "2021"
 
 [dependencies]
+resqterra-shared = { path = "shared" }
 tokio = { version = "1", features = ["full"] }
-prost = "0.14.1"
 anyhow = "1"
 
