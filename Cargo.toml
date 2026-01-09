@@ -16,4 +16,5 @@ edition = "2021"
 resqterra-shared = { path = "shared" }
 tokio = { version = "1", features = ["full"] }
 anyhow = "1"
+bytes = "1"
 
