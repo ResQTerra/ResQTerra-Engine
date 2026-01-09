@@ -1,12 +1,14 @@
+mod command;
 mod session;
 
+use command::{CommandDispatcher, TimeoutTracker};
 use resqterra_shared::{
-    codec, envelope, Envelope, Header, Heartbeat, MessageType, DroneState, AckStatus,
-    Command, CommandType,
+    envelope, AckStatus, Command, CommandType, DroneState, Envelope, Header,
+    Heartbeat, MessageType, now_ms,
 };
 use session::{DroneSession, SessionManager};
-use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Arc;
 use tokio::net::TcpListener;
 use tokio::time::{interval, Duration};
 
@@ -15,6 +17,12 @@ async fn main() -> anyhow::Result<()> {
     let listener = TcpListener::bind("0.0.0.0:8080").await?;
     let session_manager = Arc::new(SessionManager::new());
     let sequence_id = Arc::new(AtomicU64::new(0));
+
+    // Create command dispatcher
+    let dispatcher = Arc::new(CommandDispatcher::new(
+        session_manager.clone(),
+        sequence_id.clone(),
+    ));
 
     println!("Server listening on :8080");
     println!("Waiting for drone connections...");
@@ -25,11 +33,17 @@ async fn main() -> anyhow::Result<()> {
         heartbeat_monitor(sm_clone).await;
     });
 
-    // Spawn command sender demo (sends test command every 30s)
-    let sm_clone = session_manager.clone();
-    let seq_clone = sequence_id.clone();
+    // Spawn command timeout tracker
+    let disp_clone = dispatcher.clone();
     tokio::spawn(async move {
-        demo_command_sender(sm_clone, seq_clone).await;
+        let tracker = TimeoutTracker::new(disp_clone);
+        tracker.run().await;
+    });
+
+    // Spawn demo command sender
+    let disp_clone = dispatcher.clone();
+    tokio::spawn(async move {
+        demo_command_sender(disp_clone).await;
     });
 
     loop {
@@ -38,9 +52,10 @@ async fn main() -> anyhow::Result<()> {
 
         let sm = session_manager.clone();
         let seq = sequence_id.clone();
+        let disp = dispatcher.clone();
 
         tokio::spawn(async move {
-            handle_drone_session(stream, addr, sm, seq).await;
+            handle_drone_session(stream, addr, sm, seq, disp).await;
         });
     }
 }
@@ -50,6 +65,7 @@ async fn handle_drone_session(
     addr: std::net::SocketAddr,
     session_manager: Arc<SessionManager>,
     sequence_id: Arc<AtomicU64>,
+    dispatcher: Arc<CommandDispatcher>,
 ) {
     let mut session = DroneSession::new(stream, addr);
 
@@ -60,7 +76,14 @@ async fn handle_drone_session(
             session_manager.register(session.get_handle()).await;
         }
 
-        handle_envelope(&envelope, &session, &session_manager, &sequence_id).await;
+        handle_envelope(
+            &envelope,
+            &session,
+            &session_manager,
+            &sequence_id,
+            &dispatcher,
+        )
+        .await;
     }
 
     // Unregister on disconnect
@@ -78,6 +101,7 @@ async fn handle_envelope(
     session: &DroneSession,
     session_manager: &SessionManager,
     sequence_id: &AtomicU64,
+    dispatcher: &CommandDispatcher,
 ) {
     let header = match &envelope.header {
         Some(h) => h,
@@ -107,9 +131,9 @@ async fn handle_envelope(
             let response = Envelope {
                 header: Some(Header::new("server", MessageType::MsgHeartbeat, seq)),
                 payload: Some(envelope::Payload::Heartbeat(Heartbeat::new(
-                    0, // Server doesn't track uptime this way
-                    DroneState::DroneUnknown,
                     0,
+                    DroneState::DroneUnknown,
+                    dispatcher.pending_count_for(device_id).await as u32,
                     true,
                 ))),
             };
@@ -156,11 +180,8 @@ async fn handle_envelope(
         }
 
         Some(envelope::Payload::Ack(ack)) => {
-            let status = AckStatus::try_from(ack.status).unwrap_or(AckStatus::AckUnknown);
-            println!(
-                "[{}] ACK: for_seq={} cmd_id={} status={:?} msg='{}'",
-                device_id, ack.ack_sequence_id, ack.command_id, status, ack.message
-            );
+            // Forward ACK to dispatcher for tracking
+            dispatcher.handle_ack(device_id, ack).await;
         }
 
         Some(envelope::Payload::Command(_)) => {
@@ -191,38 +212,34 @@ async fn heartbeat_monitor(session_manager: Arc<SessionManager>) {
 }
 
 /// Demo: Send test commands to connected drones
-async fn demo_command_sender(session_manager: Arc<SessionManager>, sequence_id: Arc<AtomicU64>) {
-    let mut cmd_interval = interval(Duration::from_secs(30));
-    let mut command_id: u64 = 0;
+async fn demo_command_sender(dispatcher: Arc<CommandDispatcher>) {
+    let mut cmd_interval = interval(Duration::from_secs(20));
+
+    // Wait a bit before starting
+    tokio::time::sleep(Duration::from_secs(5)).await;
 
     loop {
         cmd_interval.tick().await;
 
-        let devices = session_manager.connected_devices().await;
-        if devices.is_empty() {
-            continue;
-        }
-
-        command_id += 1;
-        let seq = sequence_id.fetch_add(1, Ordering::SeqCst) + 1;
-
-        // Send a STATUS_REQUEST command to all drones
-        let cmd = Envelope {
-            header: Some(Header::new("server", MessageType::MsgCommand, seq)),
-            payload: Some(envelope::Payload::Command(Command {
-                command_id,
-                cmd_type: CommandType::CmdStatusRequest.into(),
-                expires_at_ms: resqterra_shared::now_ms() + 5000, // 5 second expiry
-                priority: 1,
-                params: Some(resqterra_shared::command::Params::StatusRequest(
-                    resqterra_shared::StatusRequest {
-                        requested_fields: vec![],
-                    },
-                )),
-            })),
+        // Send STATUS_REQUEST to all drones
+        let cmd = Command {
+            command_id: dispatcher.next_command_id(),
+            cmd_type: CommandType::CmdStatusRequest.into(),
+            expires_at_ms: now_ms() + 10000, // 10 second expiry
+            priority: 1,
+            params: Some(resqterra_shared::command::Params::StatusRequest(
+                resqterra_shared::StatusRequest {
+                    requested_fields: vec![],
+                },
+            )),
         };
 
-        println!("\n>>> Sending STATUS_REQUEST (cmd_id={}) to {} drone(s)", command_id, devices.len());
-        session_manager.broadcast(&cmd).await;
+        println!("\n>>> Broadcasting STATUS_REQUEST to all drones");
+        let sent = dispatcher.broadcast_command(cmd).await;
+        if sent.is_empty() {
+            println!("    No drones connected");
+        } else {
+            println!("    Sent to {} drone(s)", sent.len());
+        }
     }
 }

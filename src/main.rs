@@ -1,9 +1,12 @@
+mod command;
 mod connection;
 mod protocol;
 mod transport;
 
+use command::CommandExecutor;
 use connection::{ConnectionConfig, ConnectionEvent, ConnectionManager};
 use protocol::*;
+use std::sync::Arc;
 
 #[tokio::main]
 async fn main() {
@@ -18,7 +21,13 @@ async fn main() {
     println!("  5G server: {}", config.server_5g);
     println!("  BT relay:  {}", config.server_bt);
 
-    let mut conn = ConnectionManager::new(config);
+    let mut conn = ConnectionManager::new(config.clone());
+
+    // Create command executor (shares sequence_id with connection manager internally)
+    let cmd_executor = Arc::new(CommandExecutor::new(
+        config.device_id.clone(),
+        Arc::new(std::sync::atomic::AtomicU64::new(1000)), // Start from 1000 to avoid conflicts
+    ));
 
     // Main event loop
     loop {
@@ -36,7 +45,7 @@ async fn main() {
                 eprintln!("Connection failed: {}", reason);
             }
             Some(ConnectionEvent::Received(envelope)) => {
-                handle_server_message(&envelope, &conn).await;
+                handle_server_message(&envelope, &conn, &cmd_executor).await;
             }
             None => {
                 eprintln!("Connection manager closed");
@@ -46,7 +55,11 @@ async fn main() {
     }
 }
 
-async fn handle_server_message(envelope: &Envelope, conn: &ConnectionManager) {
+async fn handle_server_message(
+    envelope: &Envelope,
+    conn: &ConnectionManager,
+    cmd_executor: &CommandExecutor,
+) {
     let header = match &envelope.header {
         Some(h) => h,
         None => {
@@ -55,39 +68,32 @@ async fn handle_server_message(envelope: &Envelope, conn: &ConnectionManager) {
         }
     };
 
+    let msg_type = MessageType::try_from(header.msg_type).unwrap_or(MessageType::MsgUnknown);
+
     println!(
         "Received from server: seq={} type={:?}",
-        header.sequence_id,
-        MessageType::try_from(header.msg_type).unwrap_or(MessageType::MsgUnknown)
+        header.sequence_id, msg_type
     );
 
     match &envelope.payload {
         Some(envelope::Payload::Command(cmd)) => {
-            println!(
-                "  Command: id={} type={:?}",
-                cmd.command_id,
-                CommandType::try_from(cmd.cmd_type).unwrap_or(CommandType::CmdUnknown)
-            );
+            // Execute command and get ACK response
+            let ack_envelope = cmd_executor.execute(cmd, header).await;
 
-            // Send ACK back
-            let ack_envelope = Envelope {
-                header: Some(Header::new(
-                    conn.device_id(),
-                    MessageType::MsgAck,
-                    conn.next_sequence_id(),
-                )),
-                payload: Some(envelope::Payload::Ack(Ack::received(
-                    header.sequence_id,
-                    cmd.command_id,
-                ))),
-            };
-
+            // Send ACK back to server
             if let Err(e) = conn.send(ack_envelope).await {
                 eprintln!("Failed to send ACK: {}", e);
             }
         }
         Some(envelope::Payload::Heartbeat(hb)) => {
             println!("  Server heartbeat: healthy={}", hb.healthy);
+        }
+        Some(envelope::Payload::Ack(ack)) => {
+            let status = AckStatus::try_from(ack.status).unwrap_or(AckStatus::AckUnknown);
+            println!(
+                "  Server ACK: for_seq={} status={:?}",
+                ack.ack_sequence_id, status
+            );
         }
         _ => {
             println!("  Unhandled payload type");
