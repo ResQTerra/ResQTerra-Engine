@@ -132,6 +132,11 @@ impl ConnectionManager {
     pub fn device_id(&self) -> &str {
         &self.config.device_id
     }
+
+    /// Get a clone of the sender for outbound messages
+    pub fn get_sender(&self) -> mpsc::Sender<Envelope> {
+        self.outbound_tx.clone()
+    }
 }
 
 /// Main connection loop with reconnection logic

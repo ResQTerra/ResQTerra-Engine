@@ -4,6 +4,7 @@
 //! between drone edge devices, relay nodes, and the server.
 
 pub mod codec;
+pub mod state_machine;
 
 use std::time::{SystemTime, UNIX_EPOCH};
 

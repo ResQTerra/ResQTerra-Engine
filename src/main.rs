@@ -1,11 +1,13 @@
 mod command;
 mod connection;
 mod protocol;
+mod safety;
 mod transport;
 
 use command::CommandExecutor;
 use connection::{ConnectionConfig, ConnectionEvent, ConnectionManager};
 use protocol::*;
+use safety::{SafetyAction, SafetyMonitor};
 use std::sync::Arc;
 
 #[tokio::main]
@@ -29,6 +31,18 @@ async fn main() {
         Arc::new(std::sync::atomic::AtomicU64::new(1000)), // Start from 1000 to avoid conflicts
     ));
 
+    // Create safety monitor
+    let safety_monitor = Arc::new(SafetyMonitor::new());
+    let _safety_handle = safety_monitor.start_monitoring().await;
+    println!("Safety monitor started");
+
+    // Spawn safety action handler
+    let safety_clone = safety_monitor.clone();
+    let conn_clone = conn.get_sender();
+    tokio::spawn(async move {
+        handle_safety_actions(safety_clone, conn_clone).await;
+    });
+
     // Main event loop
     loop {
         match conn.recv().await {
@@ -45,7 +59,7 @@ async fn main() {
                 eprintln!("Connection failed: {}", reason);
             }
             Some(ConnectionEvent::Received(envelope)) => {
-                handle_server_message(&envelope, &conn, &cmd_executor).await;
+                handle_server_message(&envelope, &conn, &cmd_executor, &safety_monitor).await;
             }
             None => {
                 eprintln!("Connection manager closed");
@@ -59,6 +73,7 @@ async fn handle_server_message(
     envelope: &Envelope,
     conn: &ConnectionManager,
     cmd_executor: &CommandExecutor,
+    safety_monitor: &SafetyMonitor,
 ) {
     let header = match &envelope.header {
         Some(h) => h,
@@ -86,6 +101,8 @@ async fn handle_server_message(
             }
         }
         Some(envelope::Payload::Heartbeat(hb)) => {
+            // Update safety monitor with server heartbeat
+            safety_monitor.update_server_heartbeat().await;
             println!("  Server heartbeat: healthy={}", hb.healthy);
         }
         Some(envelope::Payload::Ack(ack)) => {
@@ -99,4 +116,33 @@ async fn handle_server_message(
             println!("  Unhandled payload type");
         }
     }
+}
+
+/// Handle safety actions triggered by the monitor
+async fn handle_safety_actions(
+    safety_monitor: Arc<SafetyMonitor>,
+    sender: tokio::sync::mpsc::Sender<Envelope>,
+) {
+    loop {
+        match safety_monitor.recv_action().await {
+            Some(SafetyAction::ReturnToHome { reason }) => {
+                println!("[MAIN] Safety RTH triggered: {}", reason);
+                // TODO: Send RTH command to flight controller via MAVLink
+                // For now, just log it
+            }
+            Some(SafetyAction::EmergencyStop { reason }) => {
+                println!("[MAIN] EMERGENCY STOP: {}", reason);
+                // TODO: Send emergency stop to flight controller
+            }
+            Some(SafetyAction::StateChanged { from, to }) => {
+                println!("[MAIN] State changed: {:?} -> {:?}", from, to);
+            }
+            Some(SafetyAction::None) => {}
+            None => {
+                eprintln!("[MAIN] Safety monitor channel closed");
+                break;
+            }
+        }
+    }
+    let _ = sender; // Keep sender alive for potential future use
 }
