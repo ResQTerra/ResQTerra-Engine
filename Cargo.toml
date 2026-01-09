@@ -17,4 +17,6 @@ resqterra-shared = { path = "shared" }
 tokio = { version = "1", features = ["full"] }
 anyhow = "1"
 bytes = "1"
+mavlink = { version = "0.14", features = ["ardupilotmega", "tokio-1"] }
+tokio-serial = "5.4"
 

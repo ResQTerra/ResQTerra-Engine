@@ -1,11 +1,13 @@
 mod command;
 mod connection;
+mod mavlink;
 mod protocol;
 mod safety;
 mod transport;
 
 use command::CommandExecutor;
 use connection::{ConnectionConfig, ConnectionEvent, ConnectionManager};
+use mavlink::{FcConfig, FcConnectionType, FcEvent, FlightController, MavCommandSender, TelemetryReader};
 use protocol::*;
 use safety::{SafetyAction, SafetyMonitor};
 use std::sync::Arc;
@@ -36,7 +38,29 @@ async fn main() {
     let _safety_handle = safety_monitor.start_monitoring().await;
     println!("Safety monitor started");
 
-    // Spawn safety action handler
+    // Create flight controller connection
+    let fc_config = FcConfig {
+        connection: FcConnectionType::Udp {
+            address: "127.0.0.1:14550".into(), // SITL default
+        },
+        ..Default::default()
+    };
+    let mut flight_controller = FlightController::new(fc_config.clone());
+    let mav_cmd_sender = Arc::new(MavCommandSender::new(
+        fc_config.target_system,
+        fc_config.target_component,
+    ));
+    let telemetry_reader = Arc::new(TelemetryReader::new());
+    println!("Flight controller bridge initialized (UDP:14550)");
+
+    // Spawn flight controller event handler
+    let telemetry_clone = telemetry_reader.clone();
+    let safety_clone = safety_monitor.clone();
+    tokio::spawn(async move {
+        handle_fc_events(&mut flight_controller, telemetry_clone, safety_clone).await;
+    });
+
+    // Spawn safety action handler with MAVLink integration
     let safety_clone = safety_monitor.clone();
     let conn_clone = conn.get_sender();
     tokio::spawn(async move {
@@ -145,4 +169,42 @@ async fn handle_safety_actions(
         }
     }
     let _ = sender; // Keep sender alive for potential future use
+}
+
+/// Handle events from the flight controller
+async fn handle_fc_events(
+    fc: &mut FlightController,
+    telemetry: Arc<TelemetryReader>,
+    _safety: Arc<SafetyMonitor>,
+) {
+    loop {
+        match fc.recv().await {
+            Some(FcEvent::Connected) => {
+                println!("[FC] Connected to flight controller");
+            }
+            Some(FcEvent::Disconnected { reason }) => {
+                println!("[FC] Disconnected: {}", reason);
+            }
+            Some(FcEvent::Heartbeat {
+                autopilot,
+                mav_type,
+                system_status,
+                base_mode,
+                custom_mode,
+            }) => {
+                println!(
+                    "[FC] Heartbeat: type={} autopilot={} status={} mode={} custom={}",
+                    mav_type, autopilot, system_status, base_mode, custom_mode
+                );
+            }
+            Some(FcEvent::Message(msg)) => {
+                // Process telemetry messages
+                telemetry.process_message(&msg).await;
+            }
+            None => {
+                eprintln!("[FC] Flight controller channel closed");
+                break;
+            }
+        }
+    }
 }
