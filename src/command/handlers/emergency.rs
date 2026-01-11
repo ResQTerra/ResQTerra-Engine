@@ -2,7 +2,7 @@
 
 use super::HandlerContext;
 use crate::command::CommandResult;
-use resqterra_shared::{Command, DroneState};
+use resqterra_shared::Command;
 
 /// Handle EMERGENCY_STOP command
 ///
@@ -17,15 +17,13 @@ pub async fn handle_emergency_stop(ctx: &HandlerContext, _command: &Command) -> 
     // Emergency stop is ALWAYS accepted, regardless of state
     // This is a safety feature - if something goes wrong, we need to be able to stop
 
-    // TODO: In Phase 5, this will:
-    // 1. Send MAVLink KILL command to flight controller
-    // 2. Disarm motors immediately
-    // 3. Log the emergency event
-
-    // Warning: This will cause the drone to fall!
-    // Only use in actual emergency situations
-
-    CommandResult::Completed {
-        message: "EMERGENCY STOP EXECUTED - Motors killed".into(),
+    // Dispatch via MAVLink
+    match ctx.mav_cmd_sender.emergency_stop().await {
+        Ok(_) => CommandResult::Completed {
+            message: "EMERGENCY STOP EXECUTED - Motors killed".into(),
+        },
+        Err(e) => CommandResult::Failed {
+            message: format!("Failed to execute emergency stop: {}", e),
+        },
     }
 }

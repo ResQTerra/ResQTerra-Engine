@@ -20,8 +20,6 @@ pub struct TelemetryReader {
     fc_status: Arc<RwLock<FlightControllerStatus>>,
     /// Current drone state
     state: Arc<RwLock<DroneState>>,
-    /// Uptime in seconds
-    uptime_seconds: Arc<RwLock<u64>>,
     /// Start time for calculating uptime
     start_time: std::time::Instant,
 }
@@ -40,7 +38,6 @@ impl TelemetryReader {
                 active_faults: vec![],
             })),
             state: Arc::new(RwLock::new(DroneState::DroneIdle)),
-            uptime_seconds: Arc::new(RwLock::new(0)),
             start_time: std::time::Instant::now(),
         }
     }
@@ -165,14 +162,12 @@ impl TelemetryReader {
 
     /// Get current telemetry as ResQTerra Telemetry message
     pub async fn get_telemetry(&self) -> Telemetry {
-        *self.uptime_seconds.write().await = self.start_time.elapsed().as_secs();
-
         Telemetry {
             position: self.position.read().await.clone(),
             battery: self.battery.read().await.clone(),
             state: (*self.state.read().await).into(),
             fc_status: Some(self.fc_status.read().await.clone()),
-            uptime_seconds: *self.uptime_seconds.read().await,
+            uptime_seconds: self.start_time.elapsed().as_secs(),
             conn_quality: Some(ConnectionQuality {
                 active_transport: Transport::Transport5g.into(),
                 rssi_dbm: 0,
@@ -180,36 +175,6 @@ impl TelemetryReader {
                 packet_loss_percent: 0.0,
             }),
         }
-    }
-
-    /// Get current drone state
-    pub async fn get_state(&self) -> DroneState {
-        *self.state.read().await
-    }
-
-    /// Get current GPS position
-    pub async fn get_position(&self) -> Option<GpsPosition> {
-        self.position.read().await.clone()
-    }
-
-    /// Get current battery status
-    pub async fn get_battery(&self) -> Option<BatteryStatus> {
-        self.battery.read().await.clone()
-    }
-
-    /// Check if drone is armed
-    pub async fn is_armed(&self) -> bool {
-        self.fc_status.read().await.armed
-    }
-
-    /// Check if we have GPS lock
-    pub async fn has_gps_lock(&self) -> bool {
-        self.fc_status.read().await.gps_lock
-    }
-
-    /// Get current flight mode
-    pub async fn get_mode(&self) -> String {
-        self.fc_status.read().await.mode.clone()
     }
 }
 

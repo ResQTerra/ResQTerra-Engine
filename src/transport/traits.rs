@@ -2,6 +2,7 @@
 
 use anyhow::Result;
 use async_trait::async_trait;
+use std::pin::Pin;
 use tokio::io::{AsyncRead, AsyncWrite};
 
 /// A transport stream that can read and write bytes
@@ -14,11 +15,8 @@ pub trait TransportStream: AsyncRead + AsyncWrite + Send + Unpin + 'static {
 /// Factory for creating transport connections
 #[async_trait]
 pub trait TransportConnector: Send + Sync {
-    /// The stream type this connector produces
-    type Stream: TransportStream;
-
     /// Attempt to connect, returning a stream on success
-    async fn connect(&self) -> Result<Self::Stream>;
+    async fn connect(&self) -> Result<Pin<Box<dyn TransportStream>>>;
 
     /// Human-readable name for this transport
     fn name(&self) -> &'static str;

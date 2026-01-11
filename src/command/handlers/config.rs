@@ -5,7 +5,7 @@ use crate::command::CommandResult;
 use resqterra_shared::{Command, command};
 
 /// Handle CONFIG_UPDATE command
-pub async fn handle_config_update(ctx: &HandlerContext, command: &Command) -> CommandResult {
+pub async fn handle_config_update(_ctx: &HandlerContext, command: &Command) -> CommandResult {
     // Extract config parameters
     let config = match &command.params {
         Some(command::Params::ConfigUpdate(c)) => c,

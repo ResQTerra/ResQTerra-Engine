@@ -5,10 +5,7 @@ use bluer::{Adapter, Address, Device};
 use std::collections::HashSet;
 use std::time::Duration;
 use tokio::time::timeout;
-
-/// UUID for ResQTerra relay service (SPP-like custom UUID)
-pub const RESQTERRA_SERVICE_UUID: bluer::Uuid =
-    bluer::Uuid::from_u128(0x00001101_0000_1000_8000_00805F9B34FB);
+use tracing::info;
 
 /// Configuration for Bluetooth discovery
 #[derive(Debug, Clone)]
@@ -36,8 +33,6 @@ impl Default for BtDiscoveryConfig {
 pub struct RelayDevice {
     /// Bluetooth MAC address
     pub address: Address,
-    /// Device name (if available)
-    pub name: Option<String>,
     /// Signal strength (if available)
     pub rssi: Option<i16>,
 }
@@ -72,7 +67,6 @@ impl BtDiscovery {
                 if let Ok(true) = device.is_connected().await {
                     relays.push(RelayDevice {
                         address: addr,
-                        name: device.name().await.ok().flatten(),
                         rssi: device.rssi().await.ok().flatten(),
                     });
                     seen.insert(addr);
@@ -97,7 +91,6 @@ impl BtDiscovery {
                         if self.is_relay_device(&device).await {
                             relays.push(RelayDevice {
                                 address: addr,
-                                name: device.name().await.ok().flatten(),
                                 rssi: device.rssi().await.ok().flatten(),
                             });
                             seen.insert(addr);
@@ -110,7 +103,7 @@ impl BtDiscovery {
 
         // Timeout is expected, not an error
         if scan_result.is_err() {
-            println!("[BT] Discovery scan completed");
+            info!("[BT] Discovery scan completed");
         }
 
         // Sort by signal strength (strongest first)

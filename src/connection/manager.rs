@@ -1,7 +1,11 @@
 //! Connection manager with persistent connections and automatic reconnection
 
+use crate::transport::{
+    bluetooth::BluetoothConnector,
+    tcp::TcpConnector,
+    traits::{TransportConnector, TransportStream},
+};
 use anyhow::{anyhow, Result};
-use bluer::rfcomm::{SocketAddr as RfcommAddr, Stream as RfcommStream};
 use bluer::Address as BtAddress;
 use resqterra_shared::{
     codec::{self, FrameDecoder},
@@ -11,8 +15,7 @@ use std::pin::Pin;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
-use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
-use tokio::net::TcpStream;
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::sync::mpsc;
 use tokio::time::{interval, timeout, Instant};
 
@@ -47,40 +50,6 @@ impl std::fmt::Display for Transport {
     }
 }
 
-/// Bluetooth transport mode
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum BluetoothMode {
-    /// Use real RFCOMM Bluetooth (requires BlueZ)
-    Rfcomm,
-    /// Use TCP simulation (for development)
-    #[default]
-    TcpSimulation,
-}
-
-/// Bluetooth configuration
-#[derive(Debug, Clone)]
-pub struct BluetoothConfig {
-    /// Bluetooth transport mode
-    pub mode: BluetoothMode,
-    /// Known relay Bluetooth address (MAC)
-    pub relay_address: Option<String>,
-    /// RFCOMM channel number
-    pub channel: u8,
-    /// TCP simulation address (when mode is TcpSimulation)
-    pub tcp_address: String,
-}
-
-impl Default for BluetoothConfig {
-    fn default() -> Self {
-        Self {
-            mode: BluetoothMode::TcpSimulation,
-            relay_address: None,
-            channel: 1,
-            tcp_address: "127.0.0.1:9000".into(),
-        }
-    }
-}
-
 /// Configuration for connection manager
 #[derive(Debug, Clone)]
 pub struct ConnectionConfig {
@@ -88,8 +57,8 @@ pub struct ConnectionConfig {
     pub device_id: String,
     /// 5G server address
     pub server_5g: String,
-    /// Bluetooth configuration
-    pub bluetooth: BluetoothConfig,
+    /// Known relay Bluetooth address (MAC)
+    pub relay_address: Option<String>,
     /// Reconnection delay (initial)
     pub reconnect_delay: Duration,
     /// Maximum reconnection delay
@@ -105,7 +74,7 @@ impl Default for ConnectionConfig {
         Self {
             device_id: "edge-001".into(),
             server_5g: "127.0.0.1:8080".into(),
-            bluetooth: BluetoothConfig::default(),
+            relay_address: None,
             reconnect_delay: Duration::from_secs(1),
             max_reconnect_delay: Duration::from_secs(30),
             connect_timeout: Duration::from_secs(5),
@@ -114,62 +83,8 @@ impl Default for ConnectionConfig {
     }
 }
 
-/// A unified stream that can be either TCP or RFCOMM
-enum ConnectionStream {
-    Tcp(TcpStream),
-    Rfcomm(RfcommStream),
-}
-
-impl ConnectionStream {
-    /// Split the stream into read and write halves
-    fn into_split(self) -> (ConnectionReader, ConnectionWriter) {
-        match self {
-            ConnectionStream::Tcp(stream) => {
-                let (r, w) = stream.into_split();
-                (ConnectionReader::Tcp(r), ConnectionWriter::Tcp(w))
-            }
-            ConnectionStream::Rfcomm(stream) => {
-                let (r, w) = stream.into_split();
-                (ConnectionReader::Rfcomm(r), ConnectionWriter::Rfcomm(w))
-            }
-        }
-    }
-}
-
-/// Read half of a connection
-enum ConnectionReader {
-    Tcp(tokio::net::tcp::OwnedReadHalf),
-    Rfcomm(bluer::rfcomm::stream::OwnedReadHalf),
-}
-
-impl ConnectionReader {
-    async fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
-        match self {
-            ConnectionReader::Tcp(r) => r.read(buf).await,
-            ConnectionReader::Rfcomm(r) => r.read(buf).await,
-        }
-    }
-}
-
-/// Write half of a connection
-enum ConnectionWriter {
-    Tcp(tokio::net::tcp::OwnedWriteHalf),
-    Rfcomm(bluer::rfcomm::stream::OwnedWriteHalf),
-}
-
-impl ConnectionWriter {
-    async fn write_all(&mut self, buf: &[u8]) -> std::io::Result<()> {
-        match self {
-            ConnectionWriter::Tcp(w) => w.write_all(buf).await,
-            ConnectionWriter::Rfcomm(w) => w.write_all(buf).await,
-        }
-    }
-}
-
 /// Manages persistent connection to server with failover
 pub struct ConnectionManager {
-    config: ConnectionConfig,
-    sequence_id: Arc<AtomicU64>,
     /// Channel to send envelopes to the server
     outbound_tx: mpsc::Sender<Envelope>,
     /// Channel to receive connection events
@@ -191,16 +106,9 @@ impl ConnectionManager {
         });
 
         Self {
-            config,
-            sequence_id,
             outbound_tx,
             event_rx,
         }
-    }
-
-    /// Get the next sequence ID
-    pub fn next_sequence_id(&self) -> u64 {
-        self.sequence_id.fetch_add(1, Ordering::SeqCst) + 1
     }
 
     /// Send an envelope to the server
@@ -216,44 +124,9 @@ impl ConnectionManager {
         self.event_rx.recv().await
     }
 
-    /// Get the device ID
-    pub fn device_id(&self) -> &str {
-        &self.config.device_id
-    }
-
     /// Get a clone of the sender for outbound messages
     pub fn get_sender(&self) -> mpsc::Sender<Envelope> {
         self.outbound_tx.clone()
-    }
-}
-
-/// Connect via Bluetooth (either RFCOMM or TCP simulation)
-async fn connect_bluetooth(config: &BluetoothConfig) -> Result<ConnectionStream> {
-    match config.mode {
-        BluetoothMode::TcpSimulation => {
-            let stream = TcpStream::connect(&config.tcp_address).await?;
-            Ok(ConnectionStream::Tcp(stream))
-        }
-        BluetoothMode::Rfcomm => {
-            let addr = config
-                .relay_address
-                .as_ref()
-                .ok_or_else(|| anyhow!("No relay address configured for RFCOMM mode"))?;
-
-            let bt_addr: BtAddress = addr
-                .parse()
-                .map_err(|_| anyhow!("Invalid Bluetooth address: {}", addr))?;
-
-            let socket_addr = RfcommAddr::new(bt_addr, config.channel);
-            println!("[BT] Connecting via RFCOMM to {} channel {}", bt_addr, config.channel);
-
-            let stream = RfcommStream::connect(socket_addr)
-                .await
-                .map_err(|e| anyhow!("RFCOMM connect failed: {}", e))?;
-
-            println!("[BT] Connected via RFCOMM to {}", bt_addr);
-            Ok(ConnectionStream::Rfcomm(stream))
-        }
     }
 }
 
@@ -264,99 +137,120 @@ async fn connection_loop(
     mut outbound_rx: mpsc::Receiver<Envelope>,
     event_tx: mpsc::Sender<ConnectionEvent>,
 ) {
-    let mut current_transport = Transport::FiveG;
+    let connectors = create_connectors(&config);
     let mut reconnect_delay = config.reconnect_delay;
 
     loop {
-        // Try to connect
-        let connect_result: Result<ConnectionStream> = match current_transport {
-            Transport::FiveG => {
-                match timeout(config.connect_timeout, TcpStream::connect(&config.server_5g)).await {
-                    Ok(Ok(stream)) => Ok(ConnectionStream::Tcp(stream)),
-                    Ok(Err(e)) => Err(anyhow!("5G connection failed: {}", e)),
-                    Err(_) => Err(anyhow!("5G connection timeout")),
-                }
-            }
-            Transport::Bluetooth => {
-                match timeout(config.connect_timeout, connect_bluetooth(&config.bluetooth)).await {
-                    Ok(Ok(stream)) => Ok(stream),
-                    Ok(Err(e)) => Err(anyhow!("Bluetooth connection failed: {}", e)),
-                    Err(_) => Err(anyhow!("Bluetooth connection timeout")),
-                }
-            }
-        };
+        let mut connected_stream: Option<Pin<Box<dyn TransportStream>>> = None;
 
-        match connect_result {
-            Ok(stream) => {
-                // Connected successfully
-                reconnect_delay = config.reconnect_delay; // Reset delay
+        for (transport, connector) in &connectors {
+            println!("[Manager] Trying transport: {}", connector.name());
+            let connect_result = timeout(config.connect_timeout, connector.connect()).await;
 
-                let _ = event_tx
-                    .send(ConnectionEvent::Connected {
-                        transport: current_transport,
-                    })
-                    .await;
-
-                // Run the connection handler
-                if let Err(reason) = handle_connection(
-                    stream,
-                    &config,
-                    &sequence_id,
-                    &mut outbound_rx,
-                    &event_tx,
-                )
-                .await
-                {
+            match connect_result {
+                Ok(Ok(stream)) => {
+                    connected_stream = Some(stream);
                     let _ = event_tx
-                        .send(ConnectionEvent::Disconnected {
-                            reason: reason.to_string(),
+                        .send(ConnectionEvent::Connected {
+                            transport: *transport,
                         })
                         .await;
+                    break;
                 }
-            }
-            Err(e) => {
-                // Connection failed, try fallback
-                if current_transport == Transport::FiveG {
-                    let _ = event_tx
-                        .send(ConnectionEvent::TransportSwitched {
-                            from: Transport::FiveG,
-                            to: Transport::Bluetooth,
-                        })
-                        .await;
-                    current_transport = Transport::Bluetooth;
-                    continue; // Try Bluetooth immediately
-                } else {
-                    // Both transports failed
-                    let _ = event_tx
-                        .send(ConnectionEvent::ConnectionFailed {
-                            reason: format!("All transports failed: {}", e),
-                        })
-                        .await;
+                Ok(Err(e)) => {
+                    eprintln!(
+                        "[Manager] Failed to connect with {}: {}",
+                        connector.name(),
+                        e
+                    );
+                    if *transport == Transport::FiveG {
+                        let _ = event_tx
+                            .send(ConnectionEvent::TransportSwitched {
+                                from: Transport::FiveG,
+                                to: Transport::Bluetooth,
+                            })
+                            .await;
+                    }
+                }
+                Err(_) => {
+                    eprintln!("[Manager] Timeout connecting with {}", connector.name());
+                    if *transport == Transport::FiveG {
+                        let _ = event_tx
+                            .send(ConnectionEvent::TransportSwitched {
+                                from: Transport::FiveG,
+                                to: Transport::Bluetooth,
+                            })
+                            .await;
+                    }
                 }
             }
         }
 
-        // Wait before reconnecting
-        tokio::time::sleep(reconnect_delay).await;
+        if let Some(stream) = connected_stream {
+            reconnect_delay = config.reconnect_delay; // Reset delay
 
-        // Exponential backoff
-        reconnect_delay = std::cmp::min(reconnect_delay * 2, config.max_reconnect_delay);
+            if let Err(reason) =
+                handle_connection(stream, &config, &sequence_id, &mut outbound_rx, &event_tx).await
+            {
+                let _ = event_tx
+                    .send(ConnectionEvent::Disconnected {
+                        reason: reason.to_string(),
+                    })
+                    .await;
+            }
+        } else {
+            let _ = event_tx
+                .send(ConnectionEvent::ConnectionFailed {
+                    reason: "All transports failed".to_string(),
+                })
+                .await;
 
-        // Reset to primary transport for next attempt
-        current_transport = Transport::FiveG;
+            // Wait before reconnecting
+            tokio::time::sleep(reconnect_delay).await;
+
+            // Exponential backoff
+            reconnect_delay = std::cmp::min(reconnect_delay * 2, config.max_reconnect_delay);
+        }
     }
+}
+
+fn create_connectors(config: &ConnectionConfig) -> Vec<(Transport, Box<dyn TransportConnector>)> {
+    let mut connectors: Vec<(Transport, Box<dyn TransportConnector>)> = Vec::new();
+
+    // 5G (TCP)
+    connectors.push((
+        Transport::FiveG,
+        Box::new(TcpConnector::new(&config.server_5g, "5G")),
+    ));
+
+    // Bluetooth
+    if let Some(addr_str) = &config.relay_address {
+        if let Ok(addr) = addr_str.parse::<BtAddress>() {
+            connectors.push((
+                Transport::Bluetooth,
+                Box::new(BluetoothConnector::new(addr)),
+            ));
+        } else {
+            eprintln!("[Manager] Invalid Bluetooth address: {}", addr_str);
+        }
+    } else {
+        connectors.push((
+            Transport::Bluetooth,
+            Box::new(BluetoothConnector::new_discovered()),
+        ));
+    }
+
+    connectors
 }
 
 /// Handle an active connection
 async fn handle_connection(
-    stream: ConnectionStream,
+    mut stream: Pin<Box<dyn TransportStream>>,
     config: &ConnectionConfig,
     sequence_id: &Arc<AtomicU64>,
     outbound_rx: &mut mpsc::Receiver<Envelope>,
     event_tx: &mpsc::Sender<ConnectionEvent>,
 ) -> Result<()> {
-    let (mut reader, mut writer) = stream.into_split();
-
     let mut decoder = FrameDecoder::new();
     let mut read_buf = vec![0u8; 4096];
 
@@ -379,17 +273,17 @@ async fn handle_connection(
                 };
 
                 let encoded = codec::encode(&envelope)?;
-                writer.write_all(&encoded).await?;
+                stream.write_all(&encoded).await?;
             }
 
             // Send outbound messages
             Some(envelope) = outbound_rx.recv() => {
                 let encoded = codec::encode(&envelope)?;
-                writer.write_all(&encoded).await?;
+                stream.write_all(&encoded).await?;
             }
 
             // Read incoming messages
-            result = timeout(config.read_timeout, reader.read(&mut read_buf)) => {
+            result = timeout(config.read_timeout, stream.read(&mut read_buf)) => {
                 match result {
                     Ok(Ok(0)) => {
                         return Err(anyhow!("Server closed connection"));

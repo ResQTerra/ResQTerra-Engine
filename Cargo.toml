@@ -22,4 +22,6 @@ tokio-serial = "5.4"
 bluer = { version = "0.17", features = ["rfcomm", "bluetoothd"] }
 async-trait = "0.1"
 futures = "0.3"
+tracing = "0.1.44"
+tracing-subscriber = { version = "0.3.22", features = ["env-filter"] }
 

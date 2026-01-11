@@ -63,30 +63,20 @@ pub struct TcpConnector {
 }
 
 impl TcpConnector {
-    /// Create a new TCP connector for 5G transport
-    pub fn new_5g(address: String) -> Self {
+    /// Create a new TCP connector
+    pub fn new(address: &str, name: &'static str) -> Self {
         Self {
-            address,
-            name: "5G",
-        }
-    }
-
-    /// Create a new TCP connector for relay transport
-    pub fn new_relay(address: String) -> Self {
-        Self {
-            address,
-            name: "Relay",
+            address: address.to_string(),
+            name,
         }
     }
 }
 
 #[async_trait]
 impl TransportConnector for TcpConnector {
-    type Stream = TcpTransportStream;
-
-    async fn connect(&self) -> Result<Self::Stream> {
+    async fn connect(&self) -> Result<Pin<Box<dyn TransportStream>>> {
         let stream = TcpStream::connect(&self.address).await?;
-        Ok(TcpTransportStream::new(stream))
+        Ok(Box::pin(TcpTransportStream::new(stream)))
     }
 
     fn name(&self) -> &'static str {
@@ -100,10 +90,10 @@ mod tests {
 
     #[test]
     fn test_tcp_connector_names() {
-        let five_g = TcpConnector::new_5g("127.0.0.1:8080".into());
+        let five_g = TcpConnector::new("127.0.0.1:8080", "5G");
         assert_eq!(five_g.name(), "5G");
 
-        let relay = TcpConnector::new_relay("127.0.0.1:9000".into());
+        let relay = TcpConnector::new("127.0.0.1:9000", "Relay");
         assert_eq!(relay.name(), "Relay");
     }
 }

@@ -2,7 +2,7 @@
 
 use super::HandlerContext;
 use crate::command::CommandResult;
-use resqterra_shared::{Command, DroneState, command};
+use resqterra_shared::{Command, DroneState, command, ReturnToHome};
 
 /// Handle RTH (Return-to-Home) command
 ///
@@ -30,28 +30,33 @@ pub async fn handle_rth(ctx: &HandlerContext, command: &Command) -> CommandResul
     }
 
     // Extract RTH parameters
-    let rth = match &command.params {
-        Some(command::Params::Rth(r)) => r,
+    let rth_params = match &command.params {
+        Some(command::Params::Rth(r)) => r.clone(),
         _ => {
             // RTH can work without explicit parameters (use defaults)
             println!("  [RTH] Using default parameters");
-            return CommandResult::Completed {
-                message: "RTH initiated with defaults".into(),
-            };
+            ReturnToHome {
+                altitude_m: 0.0,
+                speed_mps: 0.0,
+            }
         }
     };
 
     println!("  [RTH] Return-to-Home initiated");
-    if rth.altitude_m > 0.0 {
-        println!("    RTH altitude: {}m", rth.altitude_m);
+    if rth_params.altitude_m > 0.0 {
+        println!("    RTH altitude: {}m", rth_params.altitude_m);
     }
-    if rth.speed_mps > 0.0 {
-        println!("    RTH speed: {}m/s", rth.speed_mps);
+    if rth_params.speed_mps > 0.0 {
+        println!("    RTH speed: {}m/s", rth_params.speed_mps);
     }
 
-    // TODO: In Phase 5, this will trigger RTL mode via MAVLink
-
-    CommandResult::Completed {
-        message: "RTH initiated".into(),
+    // Dispatch via MAVLink
+    match ctx.mav_cmd_sender.return_to_home(&rth_params).await {
+        Ok(_) => CommandResult::Completed {
+            message: "RTH initiated".into(),
+        },
+        Err(e) => CommandResult::Failed {
+            message: format!("Failed to initiate RTH: {}", e),
+        },
     }
 }

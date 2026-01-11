@@ -7,6 +7,6 @@ mod commands;
 mod connection;
 mod telemetry;
 
-pub use commands::{ArduPilotMode, MavCommandSender};
-pub use connection::{FcConfig, FcConnectionType, FcEvent, FlightController};
+pub use commands::MavCommandSender;
+pub use connection::{FcConfig, FcConnectionType, FcEvent, FlightController, FcEventReceiver};
 pub use telemetry::TelemetryReader;

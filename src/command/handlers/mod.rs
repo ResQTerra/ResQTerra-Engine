@@ -13,11 +13,13 @@ pub use config::handle_config_update;
 pub use emergency::handle_emergency_stop;
 
 use resqterra_shared::DroneState;
+use crate::mavlink::MavCommandSender;
+use std::sync::Arc;
 
 /// Context passed to command handlers
 #[derive(Debug, Clone)]
 pub struct HandlerContext {
     pub device_id: String,
     pub current_state: DroneState,
-    pub command_id: u64,
+    pub mav_cmd_sender: Arc<MavCommandSender>,
 }

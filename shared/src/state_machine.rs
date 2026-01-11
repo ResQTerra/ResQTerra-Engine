@@ -62,7 +62,6 @@ pub struct SafetyStateMachine {
     current_state: DroneState,
     last_server_heartbeat_ms: u64,
     battery_percent: u32,
-    is_geofenced: bool,
 }
 
 impl Default for SafetyStateMachine {
@@ -78,7 +77,6 @@ impl SafetyStateMachine {
             current_state: DroneState::DroneIdle,
             last_server_heartbeat_ms: 0,
             battery_percent: 100,
-            is_geofenced: false,
         }
     }
 
@@ -184,7 +182,7 @@ impl SafetyStateMachine {
             (DroneEmergency, EmergencyCleared) => Some(DroneIdle),
 
             // RTH can be triggered from most active states
-            (DroneArmed | DroneTakingOff | DroneInMission, RthTriggered) => {
+            (DroneArmed | DroneTakingOff, RthTriggered) => {
                 Some(DroneReturningHome)
             }
 

@@ -132,9 +132,7 @@ impl RfcommConnector {
 
 #[async_trait]
 impl TransportConnector for RfcommConnector {
-    type Stream = RfcommTransportStream;
-
-    async fn connect(&self) -> Result<Self::Stream> {
+    async fn connect(&self) -> Result<Pin<Box<dyn TransportStream>>> {
         // Determine target address
         let target_addr = if let Some(addr) = self.config.relay_address {
             addr
@@ -157,7 +155,7 @@ impl TransportConnector for RfcommConnector {
             .map_err(|e| anyhow!("RFCOMM connect failed: {}", e))?;
 
         println!("[BT] Connected to {}", target_addr);
-        Ok(RfcommTransportStream::new(stream, target_addr))
+        Ok(Box::pin(RfcommTransportStream::new(stream, target_addr)))
     }
 
     fn name(&self) -> &'static str {

@@ -74,47 +74,39 @@ pub enum FcEvent {
     },
 }
 
-/// Flight controller connection manager
+/// Flight controller connection handle (shareable)
+#[derive(Clone, Debug)]
 pub struct FlightController {
-    config: FcConfig,
-    /// Connection handle (wrapped for thread safety)
-    connection: Arc<RwLock<Option<Box<dyn MavConnection<MavMessage> + Send + Sync>>>>,
     /// Channel for outgoing messages
     outbound_tx: mpsc::Sender<MavMessage>,
-    /// Channel for incoming events
+}
+
+/// Receiver for flight controller events
+pub struct FcEventReceiver {
     event_rx: mpsc::Receiver<FcEvent>,
-    /// Flag indicating if connected
-    connected: Arc<RwLock<bool>>,
 }
 
 impl FlightController {
     /// Create a new flight controller connection
-    pub fn new(config: FcConfig) -> Self {
+    pub fn new(config: FcConfig) -> (Self, FcEventReceiver) {
         let (outbound_tx, outbound_rx) = mpsc::channel::<MavMessage>(100);
         let (event_tx, event_rx) = mpsc::channel::<FcEvent>(100);
         let connected = Arc::new(RwLock::new(false));
+        let connection = Arc::new(RwLock::new(None));
 
         let fc = Self {
-            config: config.clone(),
-            connection: Arc::new(RwLock::new(None)),
             outbound_tx,
-            event_rx,
-            connected: connected.clone(),
         };
 
+        let receiver = FcEventReceiver { event_rx };
+
         // Spawn the connection handler
-        let conn_arc = fc.connection.clone();
         let connected_clone = connected;
         tokio::spawn(async move {
-            connection_loop(config, conn_arc, outbound_rx, event_tx, connected_clone).await;
+            connection_loop(config, connection, outbound_rx, event_tx, connected_clone).await;
         });
 
-        fc
-    }
-
-    /// Check if connected to flight controller
-    pub async fn is_connected(&self) -> bool {
-        *self.connected.read().await
+        (fc, receiver)
     }
 
     /// Send a MAVLink message to the flight controller
@@ -124,24 +116,12 @@ impl FlightController {
             .await
             .map_err(|_| anyhow!("FC connection closed"))
     }
+}
 
+impl FcEventReceiver {
     /// Receive the next event from the flight controller
     pub async fn recv(&mut self) -> Option<FcEvent> {
         self.event_rx.recv().await
-    }
-
-    /// Get the configuration
-    pub fn config(&self) -> &FcConfig {
-        &self.config
-    }
-
-    /// Create MAVLink header for sending messages
-    pub fn make_header(&self) -> MavHeader {
-        MavHeader {
-            system_id: self.config.system_id,
-            component_id: self.config.component_id,
-            sequence: 0, // Will be set by connection
-        }
     }
 }
 

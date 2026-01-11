@@ -12,9 +12,13 @@ pub async fn handle_status_request(ctx: &HandlerContext, _command: &Command) -> 
     println!("  [STATUS_REQUEST] Gathering status for {}", ctx.device_id);
     println!("    Current state: {:?}", ctx.current_state);
 
-    // TODO: In Phase 4, this will trigger a Telemetry message to be sent
-
-    CommandResult::Completed {
-        message: format!("Status: {:?}", ctx.current_state),
+    // Dispatch via MAVLink
+    match ctx.mav_cmd_sender.request_status().await {
+        Ok(_) => CommandResult::Completed {
+            message: format!("Status request sent. Current state: {:?}", ctx.current_state),
+        },
+        Err(e) => CommandResult::Failed {
+            message: format!("Failed to request status: {}", e),
+        },
     }
 }

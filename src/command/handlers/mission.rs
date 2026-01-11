@@ -54,11 +54,14 @@ pub async fn handle_mission_start(ctx: &HandlerContext, command: &Command) -> Co
         }
     }
 
-    // TODO: In Phase 5, this will send mission to MAVLink bridge
-    // For now, simulate accepting the mission
-
-    CommandResult::Completed {
-        message: format!("Mission {} accepted", mission.mission_id),
+    // Dispatch via MAVLink
+    match ctx.mav_cmd_sender.start_mission(mission).await {
+        Ok(_) => CommandResult::Completed {
+            message: format!("Mission {} started", mission.mission_id),
+        },
+        Err(e) => CommandResult::Failed {
+            message: format!("Failed to start mission: {}", e),
+        },
     }
 }
 
@@ -87,9 +90,13 @@ pub async fn handle_mission_abort(ctx: &HandlerContext, command: &Command) -> Co
     println!("  [MISSION_ABORT] Reason: {}", abort.reason);
     println!("    Action: {:?}", action);
 
-    // TODO: In Phase 5, this will trigger abort via MAVLink
-
-    CommandResult::Completed {
-        message: format!("Mission aborted: {}", abort.reason),
+    // Dispatch via MAVLink
+    match ctx.mav_cmd_sender.abort_mission().await {
+        Ok(_) => CommandResult::Completed {
+            message: format!("Mission aborted: {}", abort.reason),
+        },
+        Err(e) => CommandResult::Failed {
+            message: format!("Failed to abort mission: {}", e),
+        },
     }
 }
