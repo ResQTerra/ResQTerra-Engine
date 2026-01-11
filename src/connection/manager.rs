@@ -45,6 +45,40 @@ impl std::fmt::Display for Transport {
     }
 }
 
+/// Bluetooth transport mode
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum BluetoothMode {
+    /// Use real RFCOMM Bluetooth (requires BlueZ)
+    Rfcomm,
+    /// Use TCP simulation (for development)
+    #[default]
+    TcpSimulation,
+}
+
+/// Bluetooth configuration
+#[derive(Debug, Clone)]
+pub struct BluetoothConfig {
+    /// Bluetooth transport mode
+    pub mode: BluetoothMode,
+    /// Known relay Bluetooth address (MAC)
+    pub relay_address: Option<String>,
+    /// RFCOMM channel number
+    pub channel: u8,
+    /// TCP simulation address (when mode is TcpSimulation)
+    pub tcp_address: String,
+}
+
+impl Default for BluetoothConfig {
+    fn default() -> Self {
+        Self {
+            mode: BluetoothMode::TcpSimulation,
+            relay_address: None,
+            channel: 1,
+            tcp_address: "127.0.0.1:9000".into(),
+        }
+    }
+}
+
 /// Configuration for connection manager
 #[derive(Debug, Clone)]
 pub struct ConnectionConfig {
@@ -52,8 +86,8 @@ pub struct ConnectionConfig {
     pub device_id: String,
     /// 5G server address
     pub server_5g: String,
-    /// Bluetooth relay address
-    pub server_bt: String,
+    /// Bluetooth configuration
+    pub bluetooth: BluetoothConfig,
     /// Reconnection delay (initial)
     pub reconnect_delay: Duration,
     /// Maximum reconnection delay
@@ -69,7 +103,7 @@ impl Default for ConnectionConfig {
         Self {
             device_id: "edge-001".into(),
             server_5g: "127.0.0.1:8080".into(),
-            server_bt: "127.0.0.1:9000".into(),
+            bluetooth: BluetoothConfig::default(),
             reconnect_delay: Duration::from_secs(1),
             max_reconnect_delay: Duration::from_secs(30),
             connect_timeout: Duration::from_secs(5),
@@ -150,10 +184,10 @@ async fn connection_loop(
     let mut reconnect_delay = config.reconnect_delay;
 
     loop {
-        // Try to connect
+        // Try to connect (TCP mode for both currently)
         let addr = match current_transport {
             Transport::FiveG => &config.server_5g,
-            Transport::Bluetooth => &config.server_bt,
+            Transport::Bluetooth => &config.bluetooth.tcp_address,
         };
 
         match timeout(config.connect_timeout, TcpStream::connect(addr)).await {
