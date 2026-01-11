@@ -17,13 +17,12 @@ async fn main() {
     let config = ConnectionConfig {
         device_id: "edge-001".into(),
         server_5g: "127.0.0.1:8080".into(),
-        server_bt: "127.0.0.1:9000".into(),
         ..Default::default()
     };
 
     println!("Edge device starting: {}", config.device_id);
     println!("  5G server: {}", config.server_5g);
-    println!("  BT relay:  {}", config.server_bt);
+    println!("  BT relay:  {} (mode: {:?})", config.bluetooth.tcp_address, config.bluetooth.mode);
 
     let mut conn = ConnectionManager::new(config.clone());
 

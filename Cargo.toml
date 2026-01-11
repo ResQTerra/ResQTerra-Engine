@@ -19,4 +19,7 @@ anyhow = "1"
 bytes = "1"
 mavlink = { version = "0.14", features = ["ardupilotmega", "tokio-1"] }
 tokio-serial = "5.4"
+bluer = { version = "0.17", features = ["rfcomm", "bluetoothd"] }
+async-trait = "0.1"
+futures = "0.3"
 

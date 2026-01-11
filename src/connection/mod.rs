@@ -8,4 +8,7 @@
 
 mod manager;
 
-pub use manager::{ConnectionConfig, ConnectionManager, ConnectionEvent, Transport};
+pub use manager::{
+    BluetoothConfig, BluetoothMode, ConnectionConfig, ConnectionEvent, ConnectionManager,
+    Transport,
+};
